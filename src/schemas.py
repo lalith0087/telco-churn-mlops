@@ -63,3 +63,15 @@ class HealthResponse(BaseModel):
     status: str
     model_name: str
     model_version: str
+
+
+class FeatureContribution(BaseModel):
+    feature: str
+    shap_value: float
+
+
+class ExplanationResponse(BaseModel):
+    churn_prediction: int
+    churn_probability: float
+    model_version: str
+    top_contributing_features: list[FeatureContribution]

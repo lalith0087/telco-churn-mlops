@@ -6,8 +6,9 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from mlflow.tracking import MlflowClient
 
+from explain import build_explainer, explain_instance
 from promote_model import REGISTERED_MODEL_NAME
-from schemas import CustomerFeatures, HealthResponse, PredictionResponse
+from schemas import CustomerFeatures, ExplanationResponse, FeatureContribution, HealthResponse, PredictionResponse
 
 MLFLOW_TRACKING_URI = os.environ.get(
     "MLFLOW_TRACKING_URI", "file:" + os.path.join(os.path.dirname(__file__), "..", "mlruns")
@@ -21,11 +22,12 @@ app = FastAPI(
 
 _model = None
 _model_version = None
+_explainer = None
 
 
 @app.on_event("startup")
 def load_model() -> None:
-    global _model, _model_version
+    global _model, _model_version, _explainer
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     client = MlflowClient()
 
@@ -38,6 +40,9 @@ def load_model() -> None:
     _model_version = str(versions[0].version)
     _model = mlflow.sklearn.load_model(f"models:/{REGISTERED_MODEL_NAME}/Production")
     print(f"Loaded {REGISTERED_MODEL_NAME} v{_model_version} (Production)")
+
+    _explainer, _ = build_explainer(_model)
+    print("SHAP explainer ready")
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -60,4 +65,23 @@ def predict(features: CustomerFeatures) -> PredictionResponse:
         churn_prediction=pred,
         churn_probability=proba,
         model_version=_model_version,
+    )
+
+
+@app.post("/explain", response_model=ExplanationResponse)
+def explain(features: CustomerFeatures) -> ExplanationResponse:
+    if _model is None or _explainer is None:
+        raise HTTPException(status_code=503, detail="Model not loaded yet")
+
+    row = pd.DataFrame([features.model_dump()])
+    pred = int(_model.predict(row)[0])
+    proba = float(_model.predict_proba(row)[0, 1])
+
+    contributions = explain_instance(_model, _explainer, row, top_n=5)
+
+    return ExplanationResponse(
+        churn_prediction=pred,
+        churn_probability=proba,
+        model_version=_model_version,
+        top_contributing_features=[FeatureContribution(**c) for c in contributions],
     )
