@@ -143,6 +143,17 @@ curl -X POST http://127.0.0.1:8000/explain -H "Content-Type: application/json" -
 
 Positive SHAP values push the prediction toward churn; negative values push toward retention. `explain.py` uses `shap.Explainer` (not `TreeExplainer` directly), so it auto-selects the right algorithm whether the Production model is a tree ensemble (XGBoost/RandomForest) or a linear model (LogisticRegression) — no code change needed when a different model gets promoted.
 
+### Global feature importance in MLflow
+
+The `/explain` endpoint explains one prediction at a time. To see overall feature importance for the model currently in Production, run:
+
+```bash
+cd src
+python log_shap_summary.py
+```
+
+This computes SHAP values over a 200-row sample of the test set, renders a beeswarm summary plot, and logs it as an artifact (`shap_summary.png`) directly onto the Production model's MLflow run — so it shows up in the MLflow UI's Artifacts panel for that run, right alongside the confusion matrix and the model itself.
+
 ### Running via Docker
 
 ```bash
