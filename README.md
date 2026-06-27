@@ -2,7 +2,7 @@
 
 Predicts whether a telecom customer will churn, using the [IBM Telco Customer Churn](https://github.com/IBM/telco-customer-churn-on-icp4d) dataset (7,043 customers, 26 features).
 
-Pipeline stages: **EDA → feature engineering → multi-model training → MLflow experiment tracking → model registry promotion → inference → FastAPI deployment**.
+Pipeline stages: **EDA → feature engineering → multi-model training → hyperparameter tuning → MLflow experiment tracking → model registry promotion → inference → FastAPI deployment**.
 
 ## Project structure
 
@@ -13,6 +13,7 @@ ml-pipeline-mlflow/
 │   ├── eda.py                # exploratory analysis, saves plots to artifacts/
 │   ├── features.py           # cleaning + sklearn preprocessing pipeline + train/test split
 │   ├── train.py              # trains LogisticRegression, RandomForest, XGBoost; logs to MLflow
+│   ├── tune.py                # Optuna hyperparameter search per model, logs every trial to MLflow
 │   ├── promote_model.py      # picks best run by metric, registers + promotes to Production
 │   ├── predict.py            # loads Production model from the registry, scores new data
 │   ├── schemas.py            # pydantic request/response models for the API
@@ -62,6 +63,19 @@ For each of the three models, MLflow logs:
 
 This means each run is fully reproducible and deployable straight from the registry — no retraining needed to serve predictions.
 
+## Hyperparameter tuning with Optuna
+
+`train.py` trains each model once with hand-picked hyperparameters. `tune.py` goes further: it runs an Optuna study per model (25 trials each, 5-fold cross-validated ROC-AUC as the objective), logging **every trial as a nested MLflow run** under one `optuna_tuning_parent` run. After each study finishes, the best-found hyperparameters are refit on the full training set and logged as a normal top-level run — so it's directly comparable to (and competes with) the runs from `train.py` when `promote_model.py` picks the best one.
+
+```bash
+cd src
+python tune.py
+```
+
+This turns the experiment from 3 static runs into 75+ trial runs plus 3 tuned "winner" runs, all visible in the MLflow UI's table/chart/parallel-coordinates views — useful for seeing which hyperparameters actually move the needle (e.g. XGBoost's `learning_rate` and `max_depth` mattered far more than `n_estimators` here).
+
+In this run, tuned XGBoost (`max_depth=3, learning_rate=0.026, subsample=0.63`) beat every model from `train.py`, lifting test ROC-AUC from 0.835 → **0.841**, and was promoted to Production as model version 3.
+
 ## Model registry
 
 `promote_model.py` queries all runs in the `telco-churn-prediction` experiment, picks the highest-`roc_auc` run, registers it under `telco-churn-classifier`, and transitions it to the `Production` stage (archiving any prior production version). `predict.py` always loads `models:/telco-churn-classifier/Production`, so swapping in a better model later is just: train → promote → done, with no code changes downstream.
@@ -104,12 +118,22 @@ docker run -p 8000:8000 telco-churn-api
 
 The image bundles `mlruns/` (the local MLflow registry) so the container is self-contained — no external MLflow server needed for this local-dev setup. In a real deployment you'd point `MLFLOW_TRACKING_URI` at a shared MLflow tracking server/database instead of a local file store.
 
-## Results (current run)
+## Results
+
+### Baseline (`train.py`)
 
 | Model | Accuracy | Precision | Recall | F1 | ROC-AUC |
 |---|---|---|---|---|---|
-| Logistic Regression | 0.726 | 0.490 | 0.797 | 0.607 | **0.835** |
+| Logistic Regression | 0.726 | 0.490 | 0.797 | 0.607 | 0.835 |
 | Random Forest | 0.749 | 0.519 | 0.773 | 0.621 | 0.834 |
 | XGBoost | 0.785 | 0.609 | 0.529 | 0.567 | 0.830 |
 
-Logistic Regression was promoted to Production (highest ROC-AUC). Recall is prioritized via `class_weight="balanced"` since missing a churner is costlier than a false alarm in this business context.
+### After tuning (`tune.py`)
+
+| Model | Best CV ROC-AUC | Test ROC-AUC |
+|---|---|---|
+| Logistic Regression (tuned) | 0.846 | — |
+| Random Forest (tuned) | 0.848 | — |
+| XGBoost (tuned) | 0.850 | **0.841** |
+
+Tuned XGBoost was promoted to Production (model version 3), improving test ROC-AUC over the best baseline. Recall is prioritized via `class_weight="balanced"` on the linear/tree models since missing a churner is costlier than a false alarm in this business context.
