@@ -75,3 +75,7 @@ class ExplanationResponse(BaseModel):
     churn_probability: float
     model_version: str
     top_contributing_features: list[FeatureContribution]
+
+
+class NarrativeExplanationResponse(ExplanationResponse):
+    narrative: str

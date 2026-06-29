@@ -3,12 +3,21 @@ import os
 
 import mlflow
 import pandas as pd
+import requests
 from fastapi import FastAPI, HTTPException
 from mlflow.tracking import MlflowClient
 
 from explain import build_explainer, explain_instance
+from narrate import narrate
 from promote_model import REGISTERED_MODEL_NAME
-from schemas import CustomerFeatures, ExplanationResponse, FeatureContribution, HealthResponse, PredictionResponse
+from schemas import (
+    CustomerFeatures,
+    ExplanationResponse,
+    FeatureContribution,
+    HealthResponse,
+    NarrativeExplanationResponse,
+    PredictionResponse,
+)
 
 MLFLOW_TRACKING_URI = os.environ.get(
     "MLFLOW_TRACKING_URI", "file:" + os.path.join(os.path.dirname(__file__), "..", "mlruns")
@@ -84,4 +93,29 @@ def explain(features: CustomerFeatures) -> ExplanationResponse:
         churn_probability=proba,
         model_version=_model_version,
         top_contributing_features=[FeatureContribution(**c) for c in contributions],
+    )
+
+
+@app.post("/explain-narrative", response_model=NarrativeExplanationResponse)
+def explain_narrative(features: CustomerFeatures) -> NarrativeExplanationResponse:
+    if _model is None or _explainer is None:
+        raise HTTPException(status_code=503, detail="Model not loaded yet")
+
+    row = pd.DataFrame([features.model_dump()])
+    pred = int(_model.predict(row)[0])
+    proba = float(_model.predict_proba(row)[0, 1])
+
+    contributions = explain_instance(_model, _explainer, row, top_n=5)
+
+    try:
+        narrative = narrate(pred, proba, contributions)
+    except requests.exceptions.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Ollama unavailable: {exc}") from exc
+
+    return NarrativeExplanationResponse(
+        churn_prediction=pred,
+        churn_probability=proba,
+        model_version=_model_version,
+        top_contributing_features=[FeatureContribution(**c) for c in contributions],
+        narrative=narrative,
     )
