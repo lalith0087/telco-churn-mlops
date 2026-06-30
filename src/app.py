@@ -7,11 +7,15 @@ import requests
 from fastapi import FastAPI, HTTPException
 from mlflow.tracking import MlflowClient
 
-from explain import build_explainer, explain_instance
-from narrate import narrate
+from explain import aggregate_churn_drivers, build_explainer, explain_batch, explain_instance
+from narrate import narrate, narrate_batch
 from promote_model import REGISTERED_MODEL_NAME
 from schemas import (
+    BatchAnalysisRequest,
+    BatchAnalysisResponse,
     CustomerFeatures,
+    CustomerRiskSummary,
+    DriverFrequency,
     ExplanationResponse,
     FeatureContribution,
     HealthResponse,
@@ -117,5 +121,44 @@ def explain_narrative(features: CustomerFeatures) -> NarrativeExplanationRespons
         churn_probability=proba,
         model_version=_model_version,
         top_contributing_features=[FeatureContribution(**c) for c in contributions],
+        narrative=narrative,
+    )
+
+
+@app.post("/analyze-batch", response_model=BatchAnalysisResponse)
+def analyze_batch(request: BatchAnalysisRequest) -> BatchAnalysisResponse:
+    if _model is None or _explainer is None:
+        raise HTTPException(status_code=503, detail="Model not loaded yet")
+
+    rows = pd.DataFrame([c.model_dump() for c in request.customers])
+    predictions = _model.predict(rows)
+    probabilities = _model.predict_proba(rows)[:, 1]
+
+    per_customer_contributions = explain_batch(_model, _explainer, rows, top_n=5)
+    top_shared_drivers = aggregate_churn_drivers(per_customer_contributions, top_n=5)
+
+    high_risk_count = int((predictions == 1).sum())
+    average_probability = float(probabilities.mean())
+
+    try:
+        narrative = narrate_batch(
+            total_customers=len(rows),
+            high_risk_count=high_risk_count,
+            average_probability=average_probability,
+            top_shared_drivers=top_shared_drivers,
+        )
+    except requests.exceptions.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Ollama unavailable: {exc}") from exc
+
+    return BatchAnalysisResponse(
+        model_version=_model_version,
+        total_customers=len(rows),
+        high_risk_count=high_risk_count,
+        average_churn_probability=average_probability,
+        top_shared_drivers=[DriverFrequency(**d) for d in top_shared_drivers],
+        customers=[
+            CustomerRiskSummary(index=i, churn_prediction=int(pred), churn_probability=float(proba))
+            for i, (pred, proba) in enumerate(zip(predictions, probabilities))
+        ],
         narrative=narrative,
     )

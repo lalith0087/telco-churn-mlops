@@ -1,4 +1,4 @@
-from narrate import _build_prompt, _humanize_feature
+from narrate import _build_batch_prompt, _build_prompt, _humanize_feature
 
 
 def test_humanize_feature_strips_prefix_and_underscores():
@@ -23,3 +23,27 @@ def test_build_prompt_includes_probability_and_direction():
 def test_build_prompt_reflects_retention_verdict_when_not_churning():
     prompt = _build_prompt(prediction=0, probability=0.12, contributions=[])
     assert "likely to stay" in prompt
+
+
+def test_build_batch_prompt_includes_counts_and_drivers():
+    drivers = [
+        {"feature": "cat__Contract_Month-to-month", "customers_affected": 18, "avg_shap_value": 0.55},
+        {"feature": "num__tenure", "customers_affected": 12, "avg_shap_value": 0.91},
+    ]
+    prompt = _build_batch_prompt(
+        total_customers=50, high_risk_count=23, average_probability=0.46, top_shared_drivers=drivers
+    )
+
+    assert "50 customers" in prompt
+    assert "23" in prompt
+    assert "46%" in prompt
+    assert "18 of 50" in prompt
+    assert "Contract Month-to-month" in prompt
+    assert "Do not mention SHAP" in prompt
+
+
+def test_build_batch_prompt_handles_no_shared_drivers():
+    prompt = _build_batch_prompt(
+        total_customers=10, high_risk_count=0, average_probability=0.05, top_shared_drivers=[]
+    )
+    assert "no shared churn drivers detected" in prompt

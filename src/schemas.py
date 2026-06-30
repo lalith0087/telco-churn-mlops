@@ -79,3 +79,29 @@ class ExplanationResponse(BaseModel):
 
 class NarrativeExplanationResponse(ExplanationResponse):
     narrative: str
+
+
+class BatchAnalysisRequest(BaseModel):
+    customers: list[CustomerFeatures] = Field(min_length=1, max_length=500)
+
+
+class CustomerRiskSummary(BaseModel):
+    index: int
+    churn_prediction: int
+    churn_probability: float
+
+
+class DriverFrequency(BaseModel):
+    feature: str
+    customers_affected: int
+    avg_shap_value: float
+
+
+class BatchAnalysisResponse(BaseModel):
+    model_version: str
+    total_customers: int
+    high_risk_count: int
+    average_churn_probability: float
+    top_shared_drivers: list[DriverFrequency]
+    customers: list[CustomerRiskSummary]
+    narrative: str

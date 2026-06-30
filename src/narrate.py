@@ -43,9 +43,7 @@ def _build_prompt(prediction: int, probability: float, contributions: list[dict]
     )
 
 
-def narrate(prediction: int, probability: float, contributions: list[dict]) -> str:
-    prompt = _build_prompt(prediction, probability, contributions)
-
+def _call_ollama(prompt: str) -> str:
     response = requests.post(
         f"{OLLAMA_HOST}/api/generate",
         json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
@@ -53,6 +51,46 @@ def narrate(prediction: int, probability: float, contributions: list[dict]) -> s
     )
     response.raise_for_status()
     return response.json()["response"].strip()
+
+
+def narrate(prediction: int, probability: float, contributions: list[dict]) -> str:
+    return _call_ollama(_build_prompt(prediction, probability, contributions))
+
+
+def _build_batch_prompt(
+    total_customers: int,
+    high_risk_count: int,
+    average_probability: float,
+    top_shared_drivers: list[dict],
+) -> str:
+    high_risk_pct = high_risk_count / total_customers if total_customers else 0
+    lines = [
+        f"- {_humanize_feature(d['feature'])}: affects {d['customers_affected']} of {total_customers} "
+        f"at-risk customers (avg weight {d['avg_shap_value']:.2f})"
+        for d in top_shared_drivers
+    ]
+    drivers = "\n".join(lines) if lines else "- no shared churn drivers detected"
+
+    return (
+        "You are a customer retention analyst reporting to a manager. A churn model scored a batch of "
+        f"{total_customers} customers: {high_risk_count} ({high_risk_pct:.0%}) are flagged as likely to churn, "
+        f"with an average churn probability of {average_probability:.0%} across the batch. "
+        f"The churn factors shared by the most at-risk customers, ranked by how many customers they affect:\n\n"
+        f"{drivers}\n\n"
+        "In 4-5 sentences, summarize the overall risk level of this batch for the manager and recommend one "
+        "or two concrete, prioritized retention actions that would address the most common shared driver(s). "
+        "Do not mention SHAP, models, or weights — speak in plain business language."
+    )
+
+
+def narrate_batch(
+    total_customers: int,
+    high_risk_count: int,
+    average_probability: float,
+    top_shared_drivers: list[dict],
+) -> str:
+    prompt = _build_batch_prompt(total_customers, high_risk_count, average_probability, top_shared_drivers)
+    return _call_ollama(prompt)
 
 
 if __name__ == "__main__":

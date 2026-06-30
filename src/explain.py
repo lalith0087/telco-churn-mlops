@@ -58,6 +58,48 @@ def explain_instance(pipeline: Pipeline, explainer: shap.Explainer, row: "pd.Dat
     ]
 
 
+def explain_batch(pipeline: Pipeline, explainer: shap.Explainer, rows: "pd.DataFrame", top_n: int = 5) -> list[list[dict]]:
+    """Same as explain_instance but vectorized over many rows in one SHAP call."""
+    preprocessor = pipeline.named_steps["preprocessor"]
+    transformed = preprocessor.transform(rows)
+    if hasattr(transformed, "toarray"):
+        transformed = transformed.toarray()
+
+    shap_values = explainer(transformed)
+    feature_names = preprocessor.get_feature_names_out()
+
+    results = []
+    for values in shap_values.values:
+        contributions = sorted(
+            zip(feature_names, values), key=lambda pair: abs(pair[1]), reverse=True
+        )[:top_n]
+        results.append([{"feature": name, "shap_value": float(value)} for name, value in contributions])
+    return results
+
+
+def aggregate_churn_drivers(per_customer_contributions: list[list[dict]], top_n: int = 5) -> list[dict]:
+    """Collapses per-customer SHAP contributions into the drivers most often pushing customers toward churn.
+
+    Only counts positive contributions (push toward churn) since the goal is identifying
+    shared risk factors a retention team can act on across a group, not retention factors.
+    """
+    stats: dict[str, list[float]] = {}
+    for contributions in per_customer_contributions:
+        for c in contributions:
+            if c["shap_value"] > 0:
+                stats.setdefault(c["feature"], []).append(c["shap_value"])
+
+    ranked = sorted(stats.items(), key=lambda item: len(item[1]), reverse=True)[:top_n]
+    return [
+        {
+            "feature": feature,
+            "customers_affected": len(values),
+            "avg_shap_value": sum(values) / len(values),
+        }
+        for feature, values in ranked
+    ]
+
+
 if __name__ == "__main__":
     import mlflow
 
